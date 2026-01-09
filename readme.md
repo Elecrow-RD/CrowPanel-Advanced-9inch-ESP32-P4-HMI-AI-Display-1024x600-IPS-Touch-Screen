@@ -12,13 +12,13 @@
 
 | **Main Chip-ESP32-P4NRW32**                  |                                                              |
 | -------------------------------------------- | ------------------------------------------------------------ |
-| CPU/SoC                                      | **ESP32-P4**RISC-V 32-bit dual-core processor for HP systems, running at up to 400 MHz;RISC-V 32-bit single-core processor for LP systems, running at up to 40 MHz |
-| System Memory                                | 768 KB L2MEM (HP) 32 KB SRAM (LP) 8 KB TCM 32 MB PSRAM       |
-| Memory                                       | 128 KB ROM (HP) 16 KB ROM (LP) 16 MB Flash                   |
+| CPU/SoC                                      | **ESP32-P4**RISC-V 32-bit dual-core processor for HP systems, running at up to 400 MHz; RISC-V 32-bit single-core processor for LP systems, running at up to 40 MHz |
+| System Memory                                | 768 KB L2MEM（HP）32 KB SRAM（LP）8 KB TCM 32 MB PSRAM       |
+| Memory                                       | 128 KB ROM（HP）16 KB ROM（LP）16 MB Flash                   |
 | Development Language                         | MicroPython, Rust, Lua                                       |
 | Development Environment                      | ESP-IDF、Arduino IDE、LVGL                                   |
 | **Screen**                                   |                                                              |
-| Size                                         | 7.0 inch                                                     |
+| Size                                         | 9.0 inch                                                     |
 | Resolution                                   | 1024*600                                                     |
 | Display Panel                                | IPS Panel                                                    |
 | Touch Panel                                  | Capacitive Touch, Single/5-point Touch                       |
@@ -28,12 +28,12 @@
 | **Wireless Communication - Onboard Antenna** |                                                              |
 | WiFi                                         | Support 2.4GHz(Wi-Fi6), 802.11a/b/g/n                        |
 | Bluetooth                                    | Support Bluetooth 5.3 and BLE                                |
-| Other                                        | Zigbee, LoRa, nRF2401, Matter, Thread (**Optional**)         |
+| Other                                        | Zigbee、LoRa、nRF2401、Matter、Thread and Wi-Fi Halow (Optional) |
 | **Interface/Function**                       |                                                              |
 | Interface                                    | USB2.0, UART, I2C, GPIO female headers, SD card holder, battery socket, speaker jack, camera header, module female headers, etc. |
-| Function                                     | Audio amplifier, battery charge management, USB to UART, dual microphones, dual speakers etc. |
+| Function                                     | Audio amplifier, battery charge management, USB to UART, dual microphones, etc. |
 | **Button/LED Indicator**                     |                                                              |
-| Reset Button                                 | Yes, press to reset the device                               |
+| Reset Button                                 | Yes, press to reset device                                   |
 | Boot Button                                  | Yes, press and hold the power button to burn the program     |
 | Power Button                                 | Switch On/Off                                                |
 | PWR                                          | Device power on/off indication                               |
@@ -43,8 +43,7 @@
 | Operating temperature                        | -20~70 °C                                                    |
 | Storage temperature                          | -30~80 °C                                                    |
 | Power Input                                  | 5V/2A, USB or UART terminal                                  |
-| Active Area                                  | 155mm*87mm                                                   |
-| Dimensions                                   | 180*105mm                                                    |
+| Dimensions                                   | 222\*130*16mm                                                |
 
 ### 4, Use the driver module
 
@@ -53,28 +52,11 @@
 | LVGL | lvgl/lvgl@8.3.11   |
 
 ### 5,Quick Start
-##### Arduino IDE starts
-
-1.Download the library files used by this product to the 'libraries' folder.
-
-C:\Users\Documents\Arduino\libraries\
-
-![2](https://github.com/user-attachments/assets/86c568bb-3921-4a07-ae91-62d7ce752e50)
-
-
-
-2.Open the Arduino IDE
-
-![1](https://github.com/user-attachments/assets/17b4e9af-a863-4bfd-839e-be94f00a33ad)
-
-
-3.Open the code configuration environment and burn it
-
-![3](https://github.com/user-attachments/assets/1a58d8ff-616b-4b71-9465-c2dac03f3399)
-
-
-
 ##### ESP-IDF starts
+
+**Note**: This is an IDF course. Before proceeding, ensure you have Visual Studio Code and the **IDF **environment installed. The IDF version must be **5.4.2 **or higher.
+
+
 
 1.Right-click on an empty space in the project folder and select "Open with VS Code" to open the project.
 ![4](https://github.com/user-attachments/assets/a842ad62-ed8b-49c0-bfda-ee39102da467)

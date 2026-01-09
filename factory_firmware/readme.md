@@ -50,5 +50,3 @@ storage.bin-------0xb10000
 
 
 ##### Step4 Press the reset button to show the demo.
-
-##### 
