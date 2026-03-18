@@ -65,7 +65,7 @@
 
 | Name | dependency library |
 | ---- | ------------------ |
-| LVGL | lvgl/lvgl@8.3.11   |
+| LVGL | lvgl/lvgl@9.2   |
 
 ### 5,Quick Start
 ##### ESP-IDF starts
