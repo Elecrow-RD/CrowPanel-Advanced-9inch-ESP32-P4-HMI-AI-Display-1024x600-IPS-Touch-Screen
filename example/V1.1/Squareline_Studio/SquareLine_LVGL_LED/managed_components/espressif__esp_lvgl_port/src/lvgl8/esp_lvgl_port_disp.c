@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -18,11 +18,11 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-#if CONFIG_IDF_TARGET_ESP32S3 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if (SOC_LCDCAM_RGB_LCD_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
 #include "esp_lcd_panel_rgb.h"
 #endif
 
-#if (CONFIG_IDF_TARGET_ESP32P4 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
+#if (SOC_MIPI_DSI_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
 #include "esp_lcd_mipi_dsi.h"
 #endif
 
@@ -30,6 +30,12 @@
 #define LVGL_PORT_HANDLE_FLUSH_READY 0
 #else
 #define LVGL_PORT_HANDLE_FLUSH_READY 1
+#endif
+
+#if CONFIG_LCD_RGB_ISR_IRAM_SAFE
+#define LVGL_PORT_IRAM IRAM_ATTR
+#else
+#define LVGL_PORT_IRAM
 #endif
 
 static const char *TAG = "LVGL";
@@ -48,26 +54,34 @@ typedef struct {
     lv_color_t                *trans_buf;   /* Buffer send to driver */
     uint32_t                  trans_size;   /* Maximum size for one transport */
     SemaphoreHandle_t         trans_sem;    /* Idle transfer mutex */
+    lvgl_port_rounder_cb_t    rounder_cb;     /* Rounder callback for display area */
 } lvgl_port_display_ctx_t;
 
 /*******************************************************************************
 * Function definitions
 *******************************************************************************/
-static lv_disp_t *lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t *disp_cfg, const lvgl_port_disp_priv_cfg_t *priv_cfg);
+static lv_disp_t *lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t *disp_cfg,
+        const lvgl_port_disp_priv_cfg_t *priv_cfg);
 static lvgl_port_display_ctx_t *lvgl_port_get_display_ctx(lv_disp_t *disp);
 #if LVGL_PORT_HANDLE_FLUSH_READY
-static bool lvgl_port_flush_io_ready_callback(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx);
-#if (CONFIG_IDF_TARGET_ESP32S3 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
-static bool lvgl_port_flush_rgb_vsync_ready_callback(esp_lcd_panel_handle_t panel_io, const esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx);
+static bool lvgl_port_flush_io_ready_callback(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata,
+        void *user_ctx);
+#if (SOC_LCDCAM_RGB_LCD_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
+static bool lvgl_port_flush_rgb_vsync_ready_callback(esp_lcd_panel_handle_t panel_io,
+        const esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx);
 #endif
-#if (CONFIG_IDF_TARGET_ESP32P4 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
-static bool lvgl_port_flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t panel_io, esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx);
-static bool lvgl_port_flush_dpi_vsync_ready_callback(esp_lcd_panel_handle_t panel_io, esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx);
+#if (SOC_MIPI_DSI_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
+static bool lvgl_port_flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t panel_io,
+        esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx);
+static bool lvgl_port_flush_dpi_vsync_ready_callback(esp_lcd_panel_handle_t panel_io,
+        esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx);
 #endif
 #endif
 static void lvgl_port_flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map);
+static void lvgl_port_rounder_callback(lv_disp_drv_t *drv, lv_area_t *area);
 static void lvgl_port_update_callback(lv_disp_drv_t *drv);
-static void lvgl_port_pix_monochrome_callback(lv_disp_drv_t *drv, uint8_t *buf, lv_coord_t buf_w, lv_coord_t x, lv_coord_t y, lv_color_t color, lv_opa_t opa);
+static void lvgl_port_pix_monochrome_callback(lv_disp_drv_t *drv, uint8_t *buf, lv_coord_t buf_w, lv_coord_t x,
+        lv_coord_t y, lv_color_t color, lv_opa_t opa);
 
 /*******************************************************************************
 * Public API functions
@@ -96,10 +110,14 @@ lv_disp_t *lvgl_port_add_disp(const lvgl_port_display_cfg_t *disp_cfg)
     return disp;
 }
 
-lv_display_t *lvgl_port_add_disp_dsi(const lvgl_port_display_cfg_t *disp_cfg, const lvgl_port_display_dsi_cfg_t *dsi_cfg)
+lv_display_t *lvgl_port_add_disp_dsi(const lvgl_port_display_cfg_t *disp_cfg,
+                                     const lvgl_port_display_dsi_cfg_t *dsi_cfg)
 {
+    ESP_RETURN_ON_FALSE(ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0), NULL, TAG,
+                        "This IDF version does not support MIPI-DSI.");
     assert(dsi_cfg != NULL);
     const lvgl_port_disp_priv_cfg_t priv_cfg = {
+        .disp_type = LVGL_PORT_DISP_TYPE_DSI,
         .avoid_tearing = dsi_cfg->flags.avoid_tearing,
     };
     lv_disp_t *disp = lvgl_port_add_disp_priv(disp_cfg, &priv_cfg);
@@ -109,7 +127,7 @@ lv_display_t *lvgl_port_add_disp_dsi(const lvgl_port_display_cfg_t *disp_cfg, co
         /* Set display type */
         disp_ctx->disp_type = LVGL_PORT_DISP_TYPE_DSI;
 
-#if (CONFIG_IDF_TARGET_ESP32P4 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
+#if (SOC_MIPI_DSI_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
         esp_lcd_dpi_panel_event_callbacks_t cbs = {0};
         if (dsi_cfg->flags.avoid_tearing) {
             cbs.on_refresh_done = lvgl_port_flush_dpi_vsync_ready_callback;
@@ -119,17 +137,21 @@ lv_display_t *lvgl_port_add_disp_dsi(const lvgl_port_display_cfg_t *disp_cfg, co
         /* Register done callback */
         esp_lcd_dpi_panel_register_event_callbacks(disp_ctx->panel_handle, &cbs, &disp_ctx->disp_drv);
 #else
-        ESP_RETURN_ON_FALSE(false, NULL, TAG, "MIPI-DSI is supported only on ESP32P4 and from IDF 5.3!");
+        ESP_RETURN_ON_FALSE(false, NULL, TAG, "This target does not support MIPI-DSI.");
 #endif
     }
 
     return disp;
 }
 
-lv_display_t *lvgl_port_add_disp_rgb(const lvgl_port_display_cfg_t *disp_cfg, const lvgl_port_display_rgb_cfg_t *rgb_cfg)
+lv_display_t *lvgl_port_add_disp_rgb(const lvgl_port_display_cfg_t *disp_cfg,
+                                     const lvgl_port_display_rgb_cfg_t *rgb_cfg)
 {
+    ESP_RETURN_ON_FALSE(ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0), NULL, TAG,
+                        "This IDF version does not support RGB.");
     assert(rgb_cfg != NULL);
     const lvgl_port_disp_priv_cfg_t priv_cfg = {
+        .disp_type = LVGL_PORT_DISP_TYPE_RGB,
         .avoid_tearing = rgb_cfg->flags.avoid_tearing,
     };
     lv_disp_t *disp = lvgl_port_add_disp_priv(disp_cfg, &priv_cfg);
@@ -139,25 +161,30 @@ lv_display_t *lvgl_port_add_disp_rgb(const lvgl_port_display_cfg_t *disp_cfg, co
         /* Set display type */
         disp_ctx->disp_type = LVGL_PORT_DISP_TYPE_RGB;
 
-#if (CONFIG_IDF_TARGET_ESP32S3 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
+#if (SOC_LCDCAM_RGB_LCD_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
         /* Register done callback */
         const esp_lcd_rgb_panel_event_callbacks_t vsync_cbs = {
             .on_vsync = lvgl_port_flush_rgb_vsync_ready_callback,
         };
 
         const esp_lcd_rgb_panel_event_callbacks_t bb_cbs = {
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 2)
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
+            .on_frame_buf_complete = lvgl_port_flush_rgb_vsync_ready_callback,
+#elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 2)
             .on_bounce_frame_finish = lvgl_port_flush_rgb_vsync_ready_callback,
 #endif
         };
 
+        /* When LCD_RGB_ISR_IRAM_SAFE is enabled, the callback must be in IRAM and
+         * cannot call lv_display_get_driver_data() (which resides in flash).
+         * Pass disp_ctx directly as user_ctx to avoid flash access from ISR. */
         if (rgb_cfg->flags.bb_mode && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 2))) {
-            ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(disp_ctx->panel_handle, &bb_cbs, &disp_ctx->disp_drv));
+            ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(disp_ctx->panel_handle, &bb_cbs, disp_ctx));
         } else {
-            ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(disp_ctx->panel_handle, &vsync_cbs, &disp_ctx->disp_drv));
+            ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(disp_ctx->panel_handle, &vsync_cbs, disp_ctx));
         }
 #else
-        ESP_RETURN_ON_FALSE(false, NULL, TAG, "RGB is supported only on ESP32S3 and from IDF 5.0!");
+        ESP_RETURN_ON_FALSE(false, NULL, TAG, "This target does not support RGB.");
 #endif
     }
 
@@ -221,7 +248,8 @@ static lvgl_port_display_ctx_t *lvgl_port_get_display_ctx(lv_disp_t *disp)
     return disp_ctx;
 }
 
-static lv_disp_t *lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t *disp_cfg, const lvgl_port_disp_priv_cfg_t *priv_cfg)
+static lv_disp_t *lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t *disp_cfg,
+        const lvgl_port_disp_priv_cfg_t *priv_cfg)
 {
     esp_err_t ret = ESP_OK;
     lv_disp_t *disp = NULL;
@@ -237,7 +265,15 @@ static lv_disp_t *lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t *disp_cf
     assert(disp_cfg->vres > 0);
 
     /* Display context */
+#if CONFIG_LCD_RGB_ISR_IRAM_SAFE
+    /* When ISR IRAM safety is enabled, the display context is passed directly
+    * to the ISR callback as user_ctx. It must reside in internal RAM so it
+    * remains accessible when the cache is disabled during SPI flash operations. */
+    lvgl_port_display_ctx_t *disp_ctx = heap_caps_malloc(sizeof(lvgl_port_display_ctx_t),
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#else
     lvgl_port_display_ctx_t *disp_ctx = malloc(sizeof(lvgl_port_display_ctx_t));
+#endif
     ESP_GOTO_ON_FALSE(disp_ctx, ESP_ERR_NO_MEM, err, TAG, "Not enough memory for display context allocation!");
     memset(disp_ctx, 0, sizeof(lvgl_port_display_ctx_t));
     disp_ctx->io_handle = disp_cfg->io_handle;
@@ -252,25 +288,45 @@ static lv_disp_t *lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t *disp_cf
 
     /* Use RGB internal buffers for avoid tearing effect */
     if (priv_cfg && priv_cfg->avoid_tearing) {
-#if CONFIG_IDF_TARGET_ESP32S3 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-        buffer_size = disp_cfg->hres * disp_cfg->vres;
-        ESP_GOTO_ON_ERROR(esp_lcd_rgb_panel_get_frame_buffer(disp_cfg->panel_handle, 2, (void *)&buf1, (void *)&buf2), err, TAG, "Get RGB buffers failed");
-#elif CONFIG_IDF_TARGET_ESP32P4 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
-        buffer_size = disp_cfg->hres * disp_cfg->vres;
-        ESP_GOTO_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(disp_cfg->panel_handle, 2, (void *)&buf1, (void *)&buf2), err, TAG, "Get RGB buffers failed");
+#if (SOC_LCDCAM_RGB_LCD_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
+        if (priv_cfg->disp_type ==  LVGL_PORT_DISP_TYPE_RGB) {
+            buffer_size = disp_cfg->hres * disp_cfg->vres;
+            ESP_GOTO_ON_ERROR(esp_lcd_rgb_panel_get_frame_buffer(disp_cfg->panel_handle, 2, (void *)&buf1, (void *)&buf2), err, TAG,
+                              "Get RGB buffers failed");
+        }
+#endif
+#if (SOC_MIPI_DSI_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
+        if (priv_cfg->disp_type ==  LVGL_PORT_DISP_TYPE_DSI) {
+            buffer_size = disp_cfg->hres * disp_cfg->vres;
+            ESP_GOTO_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(disp_cfg->panel_handle, 2, (void *)&buf1, (void *)&buf2), err, TAG,
+                              "Get RGB buffers failed");
+        }
 #endif
 
         trans_sem = xSemaphoreCreateCounting(1, 0);
         ESP_GOTO_ON_FALSE(trans_sem, ESP_ERR_NO_MEM, err, TAG, "Failed to create transport counting Semaphore");
         disp_ctx->trans_sem = trans_sem;
     } else {
-        uint32_t buff_caps = MALLOC_CAP_DEFAULT;
+        uint32_t buff_caps = 0;
+#if SOC_PSRAM_DMA_CAPABLE == 0
+        /* Targets without PSRAM-DMA capability (e.g. ESP32, ESP32-S2)
+         * cannot satisfy the combination MALLOC_CAP_DMA|MALLOC_CAP_SPIRAM,
+         * so a small DMA bounce buffer (trans_size > 0) is required to
+         * service the SPI flush from a SPIRAM canvas. ESP32-S3 / ESP32-P4
+         * have GDMA paths that reach PSRAM directly, so the combination
+         * is allocated by heap_caps_malloc below. */
         if (disp_cfg->flags.buff_dma && disp_cfg->flags.buff_spiram && (0 == disp_cfg->trans_size)) {
             ESP_GOTO_ON_FALSE(false, ESP_ERR_NOT_SUPPORTED, err, TAG, "Alloc DMA capable buffer in SPIRAM is not supported!");
-        } else if (disp_cfg->flags.buff_dma) {
-            buff_caps = MALLOC_CAP_DMA;
-        } else if (disp_cfg->flags.buff_spiram) {
-            buff_caps = MALLOC_CAP_SPIRAM;
+        }
+#endif
+        if (disp_cfg->flags.buff_dma) {
+            buff_caps |= MALLOC_CAP_DMA;
+        }
+        if (disp_cfg->flags.buff_spiram) {
+            buff_caps |= MALLOC_CAP_SPIRAM;
+        }
+        if (buff_caps == 0) {
+            buff_caps |= MALLOC_CAP_DEFAULT;
         }
 
         if (disp_cfg->trans_size) {
@@ -307,6 +363,12 @@ static lv_disp_t *lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t *disp_cf
     disp_ctx->disp_drv.draw_buf = disp_buf;
     disp_ctx->disp_drv.user_data = disp_ctx;
 
+    /* Add rounder_cb */
+    if (disp_cfg->rounder_cb) {
+        disp_ctx->rounder_cb = disp_cfg->rounder_cb;
+        disp_ctx->disp_drv.rounder_cb = lvgl_port_rounder_callback;
+    }
+
     disp_ctx->disp_drv.sw_rotate = disp_cfg->flags.sw_rotate;
     if (disp_ctx->disp_drv.sw_rotate == false) {
         disp_ctx->disp_drv.drv_update_cb = lvgl_port_update_callback;
@@ -315,18 +377,21 @@ static lv_disp_t *lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t *disp_cf
     /* Monochrome display settings */
     if (disp_cfg->monochrome) {
         /* When using monochromatic display, there must be used full bufer! */
-        ESP_GOTO_ON_FALSE((disp_cfg->hres * disp_cfg->vres == buffer_size), ESP_ERR_INVALID_ARG, err, TAG, "Monochromatic display must using full buffer!");
+        ESP_GOTO_ON_FALSE((disp_cfg->hres * disp_cfg->vres == buffer_size), ESP_ERR_INVALID_ARG, err, TAG,
+                          "Monochromatic display must using full buffer!");
 
         disp_ctx->disp_drv.full_refresh = 1;
         disp_ctx->disp_drv.set_px_cb = lvgl_port_pix_monochrome_callback;
     } else if (disp_cfg->flags.direct_mode) {
         /* When using direct_mode, there must be used full bufer! */
-        ESP_GOTO_ON_FALSE((disp_cfg->hres * disp_cfg->vres == buffer_size), ESP_ERR_INVALID_ARG, err, TAG, "Direct mode must using full buffer!");
+        ESP_GOTO_ON_FALSE((disp_cfg->hres * disp_cfg->vres == buffer_size), ESP_ERR_INVALID_ARG, err, TAG,
+                          "Direct mode must using full buffer!");
 
         disp_ctx->disp_drv.direct_mode = 1;
     } else if (disp_cfg->flags.full_refresh) {
         /* When using full_refresh, there must be used full bufer! */
-        ESP_GOTO_ON_FALSE((disp_cfg->hres * disp_cfg->vres == buffer_size), ESP_ERR_INVALID_ARG, err, TAG, "Full refresh must using full buffer!");
+        ESP_GOTO_ON_FALSE((disp_cfg->hres * disp_cfg->vres == buffer_size), ESP_ERR_INVALID_ARG, err, TAG,
+                          "Full refresh must using full buffer!");
 
         disp_ctx->disp_drv.full_refresh = 1;
     }
@@ -359,7 +424,8 @@ err:
 }
 
 #if LVGL_PORT_HANDLE_FLUSH_READY
-static bool lvgl_port_flush_io_ready_callback(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
+static bool lvgl_port_flush_io_ready_callback(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata,
+        void *user_ctx)
 {
     BaseType_t taskAwake = pdFALSE;
 
@@ -376,8 +442,9 @@ static bool lvgl_port_flush_io_ready_callback(esp_lcd_panel_io_handle_t panel_io
     return false;
 }
 
-#if (CONFIG_IDF_TARGET_ESP32P4 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
-static bool lvgl_port_flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t panel_io, esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
+#if (SOC_MIPI_DSI_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
+static bool lvgl_port_flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t panel_io,
+        esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
 {
     BaseType_t taskAwake = pdFALSE;
 
@@ -394,7 +461,8 @@ static bool lvgl_port_flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t pane
     return false;
 }
 
-static bool lvgl_port_flush_dpi_vsync_ready_callback(esp_lcd_panel_handle_t panel_io, esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
+static bool lvgl_port_flush_dpi_vsync_ready_callback(esp_lcd_panel_handle_t panel_io,
+        esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
 {
     BaseType_t need_yield = pdFALSE;
 
@@ -411,15 +479,19 @@ static bool lvgl_port_flush_dpi_vsync_ready_callback(esp_lcd_panel_handle_t pane
 }
 #endif
 
-#if (CONFIG_IDF_TARGET_ESP32S3 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
-static bool lvgl_port_flush_rgb_vsync_ready_callback(esp_lcd_panel_handle_t panel_io, const esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx)
+#if (SOC_LCDCAM_RGB_LCD_SUPPORTED && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
+/* When LCD_RGB_ISR_IRAM_SAFE is enabled, this callback runs from IRAM.
+ * user_ctx is lvgl_port_display_ctx_t* to avoid calling lv_display_get_driver_data()
+ * which resides in flash and would crash when cache is disabled (e.g. during SPI flash ops). */
+static LVGL_PORT_IRAM bool lvgl_port_flush_rgb_vsync_ready_callback(esp_lcd_panel_handle_t panel_io,
+        const esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx)
 {
     BaseType_t need_yield = pdFALSE;
 
-    lv_disp_drv_t *disp_drv = (lv_disp_drv_t *)user_ctx;
-    assert(disp_drv != NULL);
-    lvgl_port_display_ctx_t *disp_ctx = disp_drv->user_data;
-    assert(disp_ctx != NULL);
+    lvgl_port_display_ctx_t *disp_ctx = (lvgl_port_display_ctx_t *)user_ctx;
+    if (disp_ctx == NULL) {
+        return false;
+    }
 
     if (disp_ctx->trans_sem) {
         xSemaphoreGiveFromISR(disp_ctx->trans_sem, &need_yield);
@@ -459,7 +531,8 @@ static void lvgl_port_flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, 
     lv_color_t *to = NULL;
 
     if (disp_ctx->trans_size == 0) {
-        if ((disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_RGB || disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_DSI) && (drv->direct_mode || drv->full_refresh)) {
+        if ((disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_RGB || disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_DSI)
+                && (drv->direct_mode || drv->full_refresh)) {
             if (lv_disp_flush_is_last(drv)) {
                 /* If the interface is I80 or SPI, this step cannot be used for drawing. */
                 esp_lcd_panel_draw_bitmap(disp_ctx->panel_handle, x_start, y_start, x_end + 1, y_end + 1, color_map);
@@ -471,7 +544,8 @@ static void lvgl_port_flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, 
             esp_lcd_panel_draw_bitmap(disp_ctx->panel_handle, x_start, y_start, x_end + 1, y_end + 1, color_map);
         }
 
-        if (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_RGB || (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_DSI && (drv->direct_mode || drv->full_refresh))) {
+        if (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_RGB || (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_DSI
+                && (drv->direct_mode || drv->full_refresh))) {
             lv_disp_flush_ready(drv);
         }
     } else {
@@ -499,6 +573,17 @@ static void lvgl_port_flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, 
             y_start_tmp += max_line;
             xSemaphoreTake(disp_ctx->trans_sem, portMAX_DELAY);
         }
+    }
+}
+
+static void lvgl_port_rounder_callback(lv_disp_drv_t *drv, lv_area_t *area)
+{
+    assert(drv != NULL);
+    lvgl_port_display_ctx_t *disp_ctx = (lvgl_port_display_ctx_t *)drv->user_data;
+    assert(disp_ctx != NULL);
+
+    if (disp_ctx->rounder_cb) {
+        disp_ctx->rounder_cb(area);
     }
 }
 
@@ -542,7 +627,8 @@ static void lvgl_port_update_callback(lv_disp_drv_t *drv)
     }
 }
 
-static void lvgl_port_pix_monochrome_callback(lv_disp_drv_t *drv, uint8_t *buf, lv_coord_t buf_w, lv_coord_t x, lv_coord_t y, lv_color_t color, lv_opa_t opa)
+static void lvgl_port_pix_monochrome_callback(lv_disp_drv_t *drv, uint8_t *buf, lv_coord_t buf_w, lv_coord_t x,
+        lv_coord_t y, lv_color_t color, lv_opa_t opa)
 {
     if (drv->rotated == LV_DISP_ROT_90 || drv->rotated == LV_DISP_ROT_270) {
         lv_coord_t tmp_x = x;

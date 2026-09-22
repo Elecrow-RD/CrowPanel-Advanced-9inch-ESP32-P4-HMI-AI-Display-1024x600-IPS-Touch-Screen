@@ -1,5 +1,17 @@
 # ChangeLog
 
+## v1.0.4 - 2025-09-29
+
+### bugfix:
+
+* Check the return value of the underlying deletion function. If it fails, propagate the error
+
+## v1.0.3 - 2025-09-15
+
+### Changes:
+
+* Updated phy_clk_src default value from MIPI_DSI_PHY_CLK_SRC_DEFAULT to 0
+
 ## v1.0.2 - 2025-01-13
 
 ### bugfix:
